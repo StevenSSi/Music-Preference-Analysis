@@ -1,0 +1,243 @@
+---
+title: "Spotify Project_Final"
+author: "Steven"
+date: '2022-09-03'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{R}
+install.packages("spotifyr")
+install.packages("jsonlite")
+install.packages("lubridate")
+install.packages('knitr')
+install.packages("kableExtra")
+install.packages("eply")
+```
+
+```{R}
+library(dplyr)
+library(gapminder)
+library(ggplot2)
+library(shiny)
+library(DT)
+library(plotly)
+library(shinythemes)
+library(babynames)
+library(shinyWidgets)
+library(tidyverse)
+library(spotifyr)
+library(jsonlite)
+library(lubridate)
+library(knitr)
+library(kableExtra)
+library(eply)
+```
+
+
+
+```{R}
+#UI
+ui <- fluidPage(theme = shinythemes::shinytheme("yeti"),
+  navbarPage(
+    title = "Spotify Recommendation Generator",
+    tabPanel("Intro",
+      sidebarPanel(
+        tags$h3("Input:"),
+        textInput("id", "Client ID: ", ""),
+        textInput("secret", "Client Secret: ", ""),
+        actionButton("btn", "Validate"),
+        br(),
+        br(),
+        textOutput("validate_message")),
+      mainPanel(
+        h1("Welcome to the Spotify Recommendation Generator!"),
+        br(),
+        h5("Step 1: Go to https://developer.spotify.com/dashboard/ and login to spotify"),
+        h5("Step 2: Create an app and click on Edit Settings"),
+        h5("Step 3: Add http://localhost:1410/ to Redirect URIs and save"),
+        h5("Step 4: In the overview tab, locate your client ID and Client Secret"),
+        h5("Step 5: Paste the ID and Secret into the dialog boxes, and click validate"),
+        h5("Step 6: Wait until it is connected"),
+        br(),
+        h4("Click the below button to see the results!"),
+        br(),
+        actionButton("start", "Start your analysis!")
+    )),
+    
+    
+    tabPanel("User Prefernce Analysis",
+      sidebarLayout(
+        sidebarPanel(
+          selectInput('X_variable', 'Select the X-axis', c('danceability','energy','loudness', 'speechiness', 'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo')),
+          selectInput('Y_variable', 'Select the Y-axis', c('danceability','energy','loudness', 'speechiness', 'acousticness', 'instrumentalness', 'liveness', 'valence', 'tempo'))
+        ),
+        mainPanel(
+          titlePanel("The plot shows an analysis of your favorite songs, based on chosen axis"),
+          p("This may take a minute or two..."),
+          plotly::plotlyOutput("plot_user_chosen"))
+      )
+    ),
+    
+    tabPanel("Recommendations",
+      titlePanel("Here are three recommendations based on our analysis"),
+      p("This may take a minute or two..."),
+      br(),
+      fluidRow(
+        column(
+          6,
+          "Album Cover #1",
+          uiOutput("image1"),
+        ),
+        column(
+          6,
+          "Song Name #1",
+          textOutput("text1"),
+          tags$head(tags$style("#text1{color: black; font-size: 40px; font-style: bold;}")),
+        )
+      ),
+      br(),
+      br(),
+      fluidRow(
+        column(
+          6,
+          "Album Cover #2",
+          uiOutput("image2"),
+        ),
+        column(
+          6,
+          "Song Name #2",
+          textOutput("text2"),
+          tags$head(tags$style("#text2{color: black; font-size: 40px; font-style: bold;}")),
+        )
+      ),
+      
+      br(),
+      br(),
+      fluidRow(
+        column(
+          6,
+          "Album Cover #3",
+          uiOutput("image3"),
+        ),
+        column(
+          6,
+          "Song Name #3",
+          textOutput("text3"),
+          tags$head(tags$style("#text3{color: black; font-size: 40px; font-style: bold;}")),
+        )
+      )
+    )
+  )
+)
+
+
+```
+
+
+```{R}
+#Server Code
+server <- function(input, output, session) {
+  validate <- eventReactive(input$btn, {authenticate(input$id, input$secret)})
+  output$validate_message <- renderText({validate()})
+  
+  authenticate <- function(id, secret) {
+    Sys.setenv(SPOTIFY_CLIENT_ID = id)
+    Sys.setenv(SPOTIFY_CLIENT_SECRET = secret)
+    access_token <- get_spotify_access_token()
+    
+    if (!is.null(access_token)) {
+      return("Conntected!")
+    }
+  }
+
+  observeEvent(input$start,{
+    options(httr_oauth_cache = F)
+    top_50_tracks <- get_my_top_artists_or_tracks(type = 'tracks',
+                             time_range = 'short_term',
+                             limit = 50) %>%
+    mutate(
+      artist.name = map_chr(artists, function(x) x$name[1])
+      ) %>%
+    select(name, id, artist.name, album.name)
+    
+  df <- get_track_audio_features(top_50_tracks[1,2], authorization = get_spotify_access_token())
+  for(i in 2:nrow(top_50_tracks)) {
+    df <- bind_rows(df, get_track_audio_features(top_50_tracks[i,2], authorization = get_spotify_access_token()))
+  }
+  data_binded <- bind_cols(top_50_tracks, df)
+  output$plot_user_chosen <- plotly::renderPlotly({
+    testing <- ggplot(data = data_binded, aes(x = .data[[input$X_variable]], y = .data[[input$Y_variable]], color = name)) + geom_point() + theme(legend.position="none")
+    ggplotly(testing)
+  })
+
+  #Next Tab
+  recommended_50 <- get_recommendations_all(data_binded[,2])
+  get_top_rec <- function(dataset){
+  dataset %>%
+    top_n(3, popularity)
+  }
+  
+  recommended_3 <- get_top_rec(recommended_50)
+  
+  rec_pic <- recommended_3[,20]
+
+  rec_pic_2 <- do.call(rbind, (lapply(rec_pic, function(x) x[2,])))
+
+  rec_pic_3 <- rec_pic_2[,2]
+
+  output$image1 = renderUI({
+    src = rec_pic_3[1]
+    tags$img(src=src)
+  })
+  
+  output$image2 = renderUI({
+    src = rec_pic_3[2]
+    tags$img(src=src)
+  })
+   
+  output$image3 = renderUI({
+    src = rec_pic_3[3]
+    tags$img(src=src)
+  })
+  
+  recommend_text <- recommended_3[,9]
+  
+  output$text1 <- renderText(
+    paste(recommend_text[1])
+  )
+
+  output$text2 <- renderText(
+    paste(recommend_text[2])
+  )
+  
+  output$text3 <- renderText(
+    paste(recommend_text[3])
+  )
+  
+  })
+
+  
+
+}
+
+  
+
+
+```
+
+
+
+```{R}
+shinyApp(ui = ui, server = server)
+```
+
+
+
+
+
+
+
